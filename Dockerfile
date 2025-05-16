@@ -1,80 +1,42 @@
-# Set the base image
-FROM continuumio/miniconda3:latest AS builder
+FROM python:3.10-slim-bullseye AS builder
 
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y sudo libusb-1.0 gcc g++ python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+# 1. Install EXACT build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    git \
+    libffi-dev \
+    libssl-dev \
+    zlib1g-dev \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /home/hummingbot
+# 2. Clone fresh (avoids cache issues)
+WORKDIR /app
+COPY . .
 
-# Create conda environment
-COPY setup/environment.yml /tmp/environment.yml
-RUN conda env create -f /tmp/environment.yml && \
-    conda clean -afy && \
-    rm /tmp/environment.yml
+# 3. PRECISE dependency installation
+RUN pip install --no-cache-dir \
+    Cython==0.29.32 \
+    numpy==1.21.6 \
+    && pip install -e .
 
-# Copy remaining files
-COPY bin/ bin/
-COPY hummingbot/ hummingbot/
-COPY scripts/ scripts/
-COPY controllers/ controllers/
-COPY scripts/ scripts-copy/
-COPY setup.py .
-COPY LICENSE .
-COPY README.md .
+# 4. SAFE build command
+RUN python setup.py build_ext --inplace -j 4 --verbose
 
-# activate hummingbot env when entering the CT
-SHELL [ "/bin/bash", "-lc" ]
-RUN echo "conda activate hummingbot" >> ~/.bashrc
+# ------------------------
+FROM python:3.10-slim-bullseye
 
-COPY setup/pip_packages.txt /tmp/pip_packages.txt
-RUN python3 -m pip install --no-deps -r /tmp/pip_packages.txt && \
-    rm /tmp/pip_packages.txt
+# 5. Runtime essentials only
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 
+COPY --from=builder /app /app
+WORKDIR /app
 
-RUN python3 setup.py build_ext --inplace -j 8 && \
-    rm -rf build/ && \
-    find . -type f -name "*.cpp" -delete
-
-
-# Build final image using artifacts from builder
-FROM continuumio/miniconda3:latest AS release
-
-# Dockerfile author / maintainer
-LABEL maintainer="Fede Cardoso @dardonacci <federico@hummingbot.org>"
-
-# Build arguments
-ARG BRANCH=""
-ARG COMMIT=""
-ARG BUILD_DATE=""
-LABEL branch=${BRANCH}
-LABEL commit=${COMMIT}
-LABEL date=${BUILD_DATE}
-
-# Set ENV variables
-ENV COMMIT_SHA=${COMMIT}
-ENV COMMIT_BRANCH=${BRANCH}
-ENV BUILD_DATE=${DATE}
-
-ENV INSTALLATION_TYPE=docker
-
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y sudo libusb-1.0 && \
-    rm -rf /var/lib/apt/lists/*
-
-# Create mount points
-RUN mkdir -p /home/hummingbot/conf /home/hummingbot/conf/connectors /home/hummingbot/conf/strategies /home/hummingbot/conf/controllers /home/hummingbot/conf/scripts /home/hummingbot/logs /home/hummingbot/data /home/hummingbot/certs /home/hummingbot/scripts /home/hummingbot/controllers
-
-WORKDIR /home/hummingbot
-
-# Copy all build artifacts from builder image
-COPY --from=builder /opt/conda/ /opt/conda/
-COPY --from=builder /home/ /home/
-
-# Setting bash as default shell because we have .bashrc with customized PATH (setting SHELL affects RUN, CMD and ENTRYPOINT, but not manual commands e.g. `docker run image COMMAND`!)
-SHELL [ "/bin/bash", "-lc" ]
+CMD ["python", "hummingbot.py", "start"]
 
 # Set the default command to run when starting the container
 
