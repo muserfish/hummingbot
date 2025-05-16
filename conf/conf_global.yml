@@ -1,0 +1,8 @@
+template_version: 3
+log_level: INFO
+
+rest_api:
+  enabled: true
+  port: 8000
+  bind_address: "0.0.0.0"
+  password: "your_api_password"  # Match this in dashboard env vars
